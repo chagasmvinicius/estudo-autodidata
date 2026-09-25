@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>História Autodidata</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <h1>História Autodidata</h1>
+      <p>Trilha de vídeos do YouTube organizada por ciclos e aulas, alimentada direto da planilha.</p>
+    </header>
+
+    <div class="filters">
+      <input type="search" id="busca" placeholder="Buscar por aula, vídeo ou canal..." />
+      <select id="filtro-ciclo">
+        <option value="">Todos os ciclos</option>
+      </select>
+    </div>
+
+    <main>
+      <p id="status" class="status">Carregando planilha...</p>
+      <div id="content"></div>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
