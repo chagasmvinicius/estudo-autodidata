@@ -78,6 +78,39 @@ function extractPlaylistId(url) {
   return m ? m[1] : null;
 }
 
+// --- Estado "assistido" marcado manualmente pelo usuário (persistido no navegador) ---
+const WATCHED_OVERRIDES_KEY = "historia-autodidata:watched-overrides";
+
+function loadWatchedOverrides() {
+  try {
+    return JSON.parse(localStorage.getItem(WATCHED_OVERRIDES_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function saveWatchedOverrides(overrides) {
+  localStorage.setItem(WATCHED_OVERRIDES_KEY, JSON.stringify(overrides));
+}
+
+// chave única do vídeo: usa o link (que já identifica o vídeo); se faltar, cai para código+aula+título
+function videoKey(item) {
+  const link = (item["Link"] || "").trim();
+  if (link) return link;
+  return `${item["Código"]}__${item["Aula nº"]}__${item["Título do vídeo"]}`;
+}
+
+// estado "assistido" vindo da planilha (coluna "Assistido?")
+function sheetWatched(item) {
+  return /sim/i.test(item["Assistido?"] || "");
+}
+
+// estado efetivo: override manual do usuário tem prioridade sobre a planilha
+function isWatched(item, overrides) {
+  const key = videoKey(item);
+  return key in overrides ? overrides[key] : sheetWatched(item);
+}
+
 function groupByCiclo(items) {
   const groups = new Map();
   for (const item of items) {
@@ -106,20 +139,24 @@ function badge(text, kind) {
   return span;
 }
 
-function createVideoCard(item) {
+function createVideoCard(item, overrides, onToggleWatched) {
   const id = extractYoutubeId(item["Link"]);
   const listId = !id ? extractPlaylistId(item["Link"]) : null;
   const link = (item["Link"] || "").trim();
+  const watched = isWatched(item, overrides);
 
-  const card = document.createElement(link ? "a" : "div");
-  card.className = "video-card";
+  const card = document.createElement("div");
+  card.className = "video-card" + (watched ? " video-card--watched" : "");
+
+  const inner = document.createElement(link ? "a" : "div");
+  inner.className = "video-card__link";
   if (link) {
-    card.href = link;
-    card.target = "_blank";
-    card.rel = "noopener";
+    inner.href = link;
+    inner.target = "_blank";
+    inner.rel = "noopener";
   } else {
-    card.title = "Link do YouTube não encontrado nesta linha";
-    card.classList.add("video-card--disabled");
+    inner.title = "Link do YouTube não encontrado nesta linha";
+    inner.classList.add("video-card__link--disabled");
   }
 
   if (id) {
@@ -128,12 +165,12 @@ function createVideoCard(item) {
     thumb.loading = "lazy";
     thumb.src = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
     thumb.alt = item["Título do vídeo"] || "";
-    card.appendChild(thumb);
+    inner.appendChild(thumb);
   } else if (listId) {
     const thumb = document.createElement("div");
     thumb.className = "video-card__thumb video-card__thumb--playlist";
     thumb.textContent = "▶ Playlist";
-    card.appendChild(thumb);
+    inner.appendChild(thumb);
   }
 
   const body = document.createElement("div");
@@ -160,16 +197,31 @@ function createVideoCard(item) {
       badge(item["Tipo de vídeo"], item["Tipo de vídeo"] === "Principal" ? "primary" : "secondary")
     );
   }
-  if (item["Assistido?"] && /sim/i.test(item["Assistido?"])) {
+  if (watched) {
     badges.appendChild(badge("Assistido", "done"));
   }
   body.appendChild(badges);
 
-  card.appendChild(body);
+  inner.appendChild(body);
+  card.appendChild(inner);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "video-card__watch-toggle";
+  toggle.setAttribute("aria-pressed", String(watched));
+  toggle.title = watched ? "Marcar como não assistido" : "Marcar como assistido";
+  toggle.textContent = watched ? "✓" : "";
+  toggle.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleWatched(item);
+  });
+  card.appendChild(toggle);
+
   return card;
 }
 
-function createAulaSection(aula) {
+function createAulaSection(aula, overrides, onToggleWatched) {
   const section = document.createElement("article");
   section.className = "aula";
 
@@ -191,7 +243,7 @@ function createAulaSection(aula) {
 
   const grid = document.createElement("div");
   grid.className = "video-grid";
-  aula.videos.forEach((v) => grid.appendChild(createVideoCard(v)));
+  aula.videos.forEach((v) => grid.appendChild(createVideoCard(v, overrides, onToggleWatched)));
   section.appendChild(grid);
 
   return section;
@@ -207,15 +259,17 @@ function renderCicloFilter(cicloNames) {
   });
 }
 
-function render(items) {
+function render(items, overrides, onToggleWatched) {
   const content = document.getElementById("content");
   content.innerHTML = "";
 
   const cicloFiltro = document.getElementById("filtro-ciclo").value;
   const busca = document.getElementById("busca").value.trim().toLowerCase();
+  const ocultarAssistidos = document.getElementById("ocultar-assistidos").checked;
 
   const filtrados = items.filter((item) => {
     if (cicloFiltro && item["Ciclo"] !== cicloFiltro) return false;
+    if (ocultarAssistidos && isWatched(item, overrides)) return false;
     if (!busca) return true;
     const alvo = `${item["Título da aula"]} ${item["Título do vídeo"]} ${item["Canal / instituição"]}`.toLowerCase();
     return alvo.includes(busca);
@@ -239,7 +293,7 @@ function render(items) {
     section.appendChild(h2);
 
     for (const aula of aulas.values()) {
-      section.appendChild(createAulaSection(aula));
+      section.appendChild(createAulaSection(aula, overrides, onToggleWatched));
     }
     content.appendChild(section);
   }
@@ -254,14 +308,25 @@ async function init() {
     const rows = parseCSV(text);
     const items = csvToObjects(rows);
 
+    const overrides = loadWatchedOverrides();
+    const rerender = () => render(items, overrides, toggleWatched);
+
+    function toggleWatched(item) {
+      const key = videoKey(item);
+      overrides[key] = !isWatched(item, overrides);
+      saveWatchedOverrides(overrides);
+      rerender();
+    }
+
     const ciclos = [...new Set(items.map((i) => i["Ciclo"]).filter(Boolean))];
     renderCicloFilter(ciclos);
 
     status.remove();
-    render(items);
+    rerender();
 
-    document.getElementById("filtro-ciclo").addEventListener("change", () => render(items));
-    document.getElementById("busca").addEventListener("input", () => render(items));
+    document.getElementById("filtro-ciclo").addEventListener("change", rerender);
+    document.getElementById("busca").addEventListener("input", rerender);
+    document.getElementById("ocultar-assistidos").addEventListener("change", rerender);
   } catch (err) {
     status.textContent = `Não foi possível carregar a planilha (${err.message}). Verifique se ela continua publicada na web como CSV.`;
     status.classList.add("status--error");
